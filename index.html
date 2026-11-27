@@ -299,7 +299,10 @@
         document.getElementById('predictionDisplay').textContent = err.message;
       }
     } finally {
-      if (requestId === analysisRequestId) {\n        isBotThinking = false;\n        checkServerStatus();\n      }
+      if (requestId === analysisRequestId) {
+        isBotThinking = false;
+        checkServerStatus();
+      }
     }
   }
 
@@ -318,7 +321,10 @@
       } else if (status.paused) {
         badge.textContent = 'Daily Pause';
         badge.classList.remove('ready');
-      } else if (status.busy) {\n        badge.textContent = 'Calculators Busy';\n        badge.classList.remove('ready');\n      } else if (status.available) {
+      } else if (status.busy) {
+        badge.textContent = 'Calculators Busy';
+        badge.classList.remove('ready');
+      } else if (status.available) {
         badge.textContent = '6 Calculators Ready';
         badge.classList.add('ready');
       } else {
