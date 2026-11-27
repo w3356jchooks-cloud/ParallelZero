@@ -107,9 +107,14 @@ function labelScore(candidate) {
   }
   return 'Evaluation unavailable';
 }
-async function callCalculator(fen, depth, index, turn) {
+async function callCalculator(fen, depth, index, turn, batchSignal) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 65000);
+  const abortFromBatch = () => controller.abort();
+  if (batchSignal) {
+    if (batchSignal.aborted) controller.abort();
+    else batchSignal.addEventListener('abort', abortFromBatch, { once: true });
+  }
   try {
     const response = await fetch(ENGINE_URL, {
       method: 'POST',
@@ -139,7 +144,10 @@ async function callCalculator(fen, depth, index, turn) {
     };
     candidate.sideScore = scoreForTurn(candidate, turn);
     return candidate;
-  } finally { clearTimeout(timeout); }
+  } finally {
+    clearTimeout(timeout);
+    if (batchSignal) batchSignal.removeEventListener('abort', abortFromBatch);
+  }
 }
 function chooseOverallWinner(candidates) {
   const groups = new Map();
@@ -214,11 +222,14 @@ module.exports = async function handler(req, res) {
   }
 
   let settled;
+  const batchController = new AbortController();
+  res.on('close', () => { if (!res.writableEnded) batchController.abort(); });
   try {
-    settled = await Promise.allSettled(DEPTHS.map((depth, index) => callCalculator(fen, depth, index, turn)));
+    settled = await Promise.allSettled(DEPTHS.map((depth, index) => callCalculator(fen, depth, index, turn, batchController.signal)));
   } finally {
     await releasePositionLock(lock).catch(() => {});
   }
+  if (res.destroyed) return;
   const failures = settled.map((result, index) => result.status === 'rejected'
     ? { calculator: index + 1, error: result.reason && result.reason.message ? result.reason.message : 'Unknown API error' }
     : null).filter(Boolean);
