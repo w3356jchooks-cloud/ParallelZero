@@ -1,0 +1,9 @@
+{
+  "name": "parallelzero",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Six-calculator chess analysis website",
+  "engines": { "node": ">=20" },
+  "scripts": { "start": "vercel dev" },
+  "devDependencies": { "vercel": "^41.0.0" }
+}
