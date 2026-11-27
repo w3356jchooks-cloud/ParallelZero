@@ -246,6 +246,7 @@
   let gameFinishedByTimeout = false;
   let gameStartedAt = null;
   let analysisRequestId = 0;
+  let activeAnalysisController = null;
 
   let whiteTimeRemaining = 3600;
   let blackTimeRemaining = 3600;
@@ -265,6 +266,8 @@
     }
     isBotThinking = true;
     const requestId = ++analysisRequestId;
+    const controller = new AbortController();
+    activeAnalysisController = controller;
     const requestedFen = game.fen();
     document.getElementById('bestMoveDisplay').textContent = 'Six calculators analyzing...';
     document.getElementById('predictionDisplay').textContent =
@@ -273,7 +276,8 @@
       const response = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fen: requestedFen })
+        body: JSON.stringify({ fen: requestedFen }),
+        signal: controller.signal
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || `Analysis request failed (${response.status})`);
@@ -301,6 +305,7 @@
     } finally {
       if (requestId === analysisRequestId) {
         isBotThinking = false;
+        activeAnalysisController = null;
         checkServerStatus();
       }
     }
@@ -373,6 +378,8 @@
   function finishByTimeout(message) {
     gameFinishedByTimeout = true;
     analysisRequestId++;
+    if (activeAnalysisController) activeAnalysisController.abort();
+    activeAnalysisController = null;
     isBotThinking = false;
     if (gameClockInterval) clearInterval(gameClockInterval);
     document.getElementById('gameAlert').textContent = message;
@@ -491,6 +498,8 @@
   document.getElementById('forceBtn').addEventListener('click', queryRemoteStockfishServer);
   document.getElementById('undoBtn').addEventListener('click', () => {
     analysisRequestId++;
+    if (activeAnalysisController) activeAnalysisController.abort();
+    activeAnalysisController = null;
     isBotThinking = false;
     game.undo();
     gameFinishedByTimeout = false;
@@ -502,6 +511,8 @@
   });
   document.getElementById('resetBtn').addEventListener('click', () => {
     analysisRequestId++;
+    if (activeAnalysisController) activeAnalysisController.abort();
+    activeAnalysisController = null;
     isBotThinking = false;
     game.reset();
     gameStarted = false;
