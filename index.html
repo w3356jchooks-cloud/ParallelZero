@@ -396,6 +396,8 @@
     gameStartedAt = null;
     gameFinishedByTimeout = false;
     analysisRequestId++;
+    if (activeAnalysisController) activeAnalysisController.abort();
+    activeAnalysisController = null;
     isBotThinking = false;
     if (gameClockInterval) clearInterval(gameClockInterval);
     selectedSquare = null;
