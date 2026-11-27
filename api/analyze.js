@@ -1,3 +1,4 @@
+const { createHash, randomUUID } = require('crypto');
 const DEPTHS = [38, 38, 37, 37, 37, 37];
 const MAX_DAILY_CALLS = 200;
 const MAX_DAILY_USED = 198;
@@ -42,6 +43,17 @@ async function redisCommand(command) {
 }
 async function getUsage(dayKey) {
   return Number((await redisCommand(['GET', `parallelzero:daily-calls:${dayKey}`])) || 0);
+}
+async function acquirePositionLock(fen) {
+  const digest = createHash('sha256').update(fen).digest('hex');
+  const lock = { key: `parallelzero:position-lock:${digest}`, token: randomUUID() };
+  const result = await redisCommand(['SET', lock.key, lock.token, 'NX', 'EX', '75']);
+  return result === 'OK' ? lock : null;
+}
+async function releasePositionLock(lock) {
+  if (!lock) return;
+  const script = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end";
+  await redisCommand(['EVAL', script, '1', lock.key, lock.token]);
 }
 async function reserveSixCalls(dayKey, now) {
   const key = `parallelzero:daily-calls:${dayKey}`;
@@ -165,10 +177,18 @@ module.exports = async function handler(req, res) {
   if (!validFen(fen)) return json(res, 400, { error: 'A valid six-field FEN position is required.' });
   const turn = fen.trim().split(/\s+/)[1];
   const dayKey = utcDayKey();
+  let lock = null;
   let used;
-  try { used = await reserveSixCalls(dayKey, new Date()); }
-  catch (error) { return json(res, 503, { error: `Could not reserve API usage safely: ${error.message}` }); }
+  try {
+    lock = await acquirePositionLock(fen);
+    if (!lock) return json(res, 409, { error: 'This exact chess position is already being analyzed. Please wait for that batch to finish.' });
+    used = await reserveSixCalls(dayKey, new Date());
+  } catch (error) {
+    await releasePositionLock(lock).catch(() => {});
+    return json(res, 503, { error: `Could not reserve API usage safely: ${error.message}` });
+  }
   if (used < 0) {
+    await releasePositionLock(lock).catch(() => {});
     const currentUsed = await getUsage(dayKey).catch(() => MAX_DAILY_USED);
     return json(res, 429, {
       error: 'Daily analysis budget reached. ParallelZero stops with its final two API calls reserved.',
@@ -176,7 +196,12 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  const settled = await Promise.allSettled(DEPTHS.map((depth, index) => callCalculator(fen, depth, index, turn)));
+  let settled;
+  try {
+    settled = await Promise.allSettled(DEPTHS.map((depth, index) => callCalculator(fen, depth, index, turn)));
+  } finally {
+    await releasePositionLock(lock).catch(() => {});
+  }
   const failures = settled.map((result, index) => result.status === 'rejected'
     ? { calculator: index + 1, error: result.reason && result.reason.message ? result.reason.message : 'Unknown API error' }
     : null).filter(Boolean);
