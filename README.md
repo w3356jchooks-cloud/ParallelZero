@@ -5,7 +5,8 @@ ParallelZero is a mobile-friendly chess website using six parallel ChessDrive St
 ## Current implementation
 
 - Original dark chess interface preserved.
-- Six simultaneous ChessDrive requests per analysis.
+- Six simultaneous ChessDrive requests per analysis; a global lock permits only one batch at a time, matching the Free plan's six in-flight Stockfish limit.
+- Rolling-window rate guard keeps the app under 20 Stockfish requests per minute.
 - Depth allocation: **38, 38, 37, 37, 37, 37** (224 total assigned depth).
 - Each request asks for **five ranked lines**. Its rank-1 line supplies that calculator's own best move.
 - The backend compares the six selected moves using median side-to-move evaluation, then vote count, depth, and deterministic tie-breaks.
@@ -19,7 +20,8 @@ ParallelZero is a mobile-friendly chess website using six parallel ChessDrive St
 - The six calls use the same Stockfish provider/engine; they are six separate searches, not six different engine implementations.
 - Six depths summing to 224 are an assigned depth budget, **not** equivalent to one depth-224 search.
 - The 200-call cap and midnight UTC schedule are ParallelZero's planned app controls. They are not verified statements about ChessDrive's account quota or billing reset.
-- ChessDrive bills by engine time. Check the live account balance and provider terms before real use.
+- ChessDrive's Free plan currently allows 200 Stockfish calls/day and six Stockfish requests in flight. ParallelZero intentionally stops at 198 calls and runs only one six-call batch at a time.
+- Engine use is metered by engine time (currently listed at $4.50 per engine hour). The Free account includes a one-time $10 trial-credit grant, not unlimited free engine time. Check the live balance before real use and do not enable automatic top-ups.
 
 ## Backend and secret setup
 
