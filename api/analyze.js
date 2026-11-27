@@ -56,7 +56,7 @@ async function releasePositionLock(lock) {
 }
 async function reserveBatchLimits(dayKey, now) {
   const dailyKey = `parallelzero:daily-calls:${dayKey}`;
-  const minuteKey = `parallelzero:minute-calls:${now.toISOString().slice(0, 16)}`;
+  const minuteKey = 'parallelzero:minute-calls';
   const ttl = Math.max(60, Math.ceil((Date.UTC(
     now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1
   ) - now.getTime()) / 1000) + 86400);
@@ -166,8 +166,9 @@ module.exports = async function handler(req, res) {
     }
     try {
       const used = await getUsage(utcDayKey());
+      const busy = Boolean(await redisCommand(['GET', 'parallelzero:global-batch-lock']));
       return json(res, 200, {
-        available: !schedule.paused && used < MAX_DAILY_USED, paused: schedule.paused,
+        available: !schedule.paused && !busy && used < MAX_DAILY_USED, busy, paused: schedule.paused,
         usedCalls: used, remainingCalls: Math.max(0, MAX_DAILY_CALLS - used),
         analysesRemaining: Math.floor(Math.max(0, MAX_DAILY_USED - used) / 6),
         dailyCallBudget: MAX_DAILY_CALLS, reservedCalls: 2
