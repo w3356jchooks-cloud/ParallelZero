@@ -1,4 +1,4 @@
-const { createHash, randomUUID } = require('crypto');
+const { randomUUID } = require('crypto');
 const DEPTHS = [38, 38, 37, 37, 37, 37];
 const MAX_DAILY_CALLS = 200;
 const MAX_DAILY_USED = 198;
@@ -44,9 +44,8 @@ async function redisCommand(command) {
 async function getUsage(dayKey) {
   return Number((await redisCommand(['GET', `parallelzero:daily-calls:${dayKey}`])) || 0);
 }
-async function acquirePositionLock(fen) {
-  const digest = createHash('sha256').update(fen).digest('hex');
-  const lock = { key: `parallelzero:position-lock:${digest}`, token: randomUUID() };
+async function acquireBatchLock() {
+  const lock = { key: 'parallelzero:global-batch-lock', token: randomUUID() };
   const result = await redisCommand(['SET', lock.key, lock.token, 'NX', 'EX', '75']);
   return result === 'OK' ? lock : null;
 }
@@ -55,21 +54,31 @@ async function releasePositionLock(lock) {
   const script = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end";
   await redisCommand(['EVAL', script, '1', lock.key, lock.token]);
 }
-async function reserveSixCalls(dayKey, now) {
-  const key = `parallelzero:daily-calls:${dayKey}`;
+async function reserveBatchLimits(dayKey, now) {
+  const dailyKey = `parallelzero:daily-calls:${dayKey}`;
+  const minuteKey = `parallelzero:minute-calls:${now.toISOString().slice(0, 16)}`;
   const ttl = Math.max(60, Math.ceil((Date.UTC(
     now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1
   ) - now.getTime()) / 1000) + 86400);
   const lua = [
     "local used = tonumber(redis.call('GET', KEYS[1]) or '0')",
-    "local batch = tonumber(ARGV[1])",
-    "local cap = tonumber(ARGV[2])",
-    "if used + batch > cap then return -1 end",
-    "local nextUsed = used + batch",
-    "redis.call('SET', KEYS[1], nextUsed, 'EX', ARGV[3])",
-    "return nextUsed"
+    "local dailyCap = tonumber(ARGV[1])",
+    "if used + 6 > dailyCap then return {-1, used, 0} end",
+    "local nowMs = tonumber(ARGV[2])",
+    "redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', nowMs - 60000)",
+    "local recent = tonumber(redis.call('ZCARD', KEYS[2]))",
+    "if recent + 6 > tonumber(ARGV[3]) then return {-2, used, recent} end",
+    "local nextUsed = used + 6",
+    "redis.call('SET', KEYS[1], nextUsed, 'EX', ARGV[4])",
+    "for i = 1, 6 do redis.call('ZADD', KEYS[2], nowMs, ARGV[5] .. ':' .. i) end",
+    "redis.call('EXPIRE', KEYS[2], 120)",
+    "return {nextUsed, recent + 6, 0}"
   ].join('\n');
-  return Number(await redisCommand(['EVAL', lua, '1', key, '6', String(MAX_DAILY_USED), String(ttl)]));
+  const result = await redisCommand([
+    'EVAL', lua, '2', dailyKey, minuteKey,
+    String(MAX_DAILY_USED), String(now.getTime()), '20', String(ttl), randomUUID()
+  ]);
+  return { code: Number(result[0]), used: Number(result[1] || 0), recent: Number(result[2] || 0) };
 }
 function scoreForTurn(line, turn) {
   if (typeof line.mate === 'number') {
@@ -179,15 +188,22 @@ module.exports = async function handler(req, res) {
   const dayKey = utcDayKey();
   let lock = null;
   let used;
+  let dailyLimitReached = false;
   try {
-    lock = await acquirePositionLock(fen);
-    if (!lock) return json(res, 409, { error: 'This exact chess position is already being analyzed. Please wait for that batch to finish.' });
-    used = await reserveSixCalls(dayKey, new Date());
+    lock = await acquireBatchLock();
+    if (!lock) return json(res, 429, { error: 'All six calculator slots are busy analyzing another position. Please wait for that batch to finish.' });
+    const reservation = await reserveBatchLimits(dayKey, new Date());
+    used = reservation.used;
+    dailyLimitReached = reservation.code === -1;
+    if (reservation.code === -2) {
+      await releasePositionLock(lock).catch(() => {});
+      return json(res, 429, { error: 'ChessDrive free-plan limit: ParallelZero is keeping within 20 requests per rolling minute. Please wait before retrying.' });
+    }
   } catch (error) {
     await releasePositionLock(lock).catch(() => {});
     return json(res, 503, { error: `Could not reserve API usage safely: ${error.message}` });
   }
-  if (used < 0) {
+  if (dailyLimitReached) {
     await releasePositionLock(lock).catch(() => {});
     const currentUsed = await getUsage(dayKey).catch(() => MAX_DAILY_USED);
     return json(res, 429, {
