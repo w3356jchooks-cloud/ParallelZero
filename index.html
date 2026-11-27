@@ -407,6 +407,7 @@
       alertEl.textContent = 'TIME EXPIRED';
       return;
     }
+    if (game.game_over() && gameClockInterval) clearInterval(gameClockInterval);
     if (game.in_checkmate()) {
       alertEl.textContent = 'CHECKMATE!';
       return;
